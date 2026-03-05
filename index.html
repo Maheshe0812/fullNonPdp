@@ -1,0 +1,247 @@
+<html>
+  <head>
+    <div style="position: fixed; bottom: 10px; right: 10px; width: 300px; font-size: 30px; color: #666; text-align: right;">
+    As per Retail and E-Comm, they are looking to update the appearance and colour of the Chatbot...
+</div>
+	<style type='text/css'>
+        .embeddedMessagingMinimizedNotification {
+            background-color: rgba(255,255,255, 0.85); !important;
+        }  
+		.embeddedMessagingMinimizedNotificationDismissButton {
+        	background-color: rgba(255,255,255, 0); !important;
+        }
+		.embeddedMessagingMinimizedNotificationTextWrapper {
+			background-color: rgba(255,255,255, 0); !important;
+		}
+            
+        </style>
+  </head>
+  <body>
+    <script type="text/javascript">
+function initEmbeddedMessaging() {
+  try {
+    embeddedservice_bootstrap.settings.language = 'en_US';
+    embeddedservice_bootstrap.settings.enableUserInputForConversationWithBot = false;
+
+    // ============================================================
+    //  Persistent State (Survives Page Navigation)
+    // ============================================================
+    const STORAGE_KEY = "hostComposerState:v1";
+
+    let humanPresent = false;   // TRUE once agent joins
+    let allowOpen    = false;   // TRUE when last bot message is in allowList
+
+    function loadState() {
+      try {
+        const raw = sessionStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+        const s = JSON.parse(raw);
+        humanPresent = !!s.humanPresent;
+        allowOpen    = !!s.allowOpen;
+      } catch (e) {
+        console.warn("[host persist] Load error:", e);
+      }
+    }
+
+    function saveState() {
+      try {
+        sessionStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ humanPresent, allowOpen })
+        );
+      } catch (e) {
+        console.warn("[host persist] Save error:", e);
+      }
+    }
+
+    // Load prior state BEFORE we wire listeners
+    loadState();
+
+
+    // ============================================================
+    // allowList & Helpers
+    // ============================================================
+    const allowList = new Set([
+      'can you try again by entering your valid phone number in the format of 1234567890?',
+      "i couldn't capture your email address, do you want to try again?",
+      "sorry, i didn't understand that. please provide a valid email address.",
+      "we're looking forward to connecting.",
+      "this info will help me connect you with an associate.",
+       "to check the status of your order, please enter your tonal order id below"
+    ]);
+    const norm = s => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+
+    // ============================================================
+    // Post Enable/Disable to Iframe
+    // ============================================================
+    function postIframeEnable() {
+      const iframe = document.getElementById('embeddedMessagingFrame');
+      if (!iframe?.src) return;
+      iframe.contentWindow.postMessage('InputEnable', new URL(iframe.src).origin);
+
+    }
+
+    function postIframeDisable() {
+      const iframe = document.getElementById('embeddedMessagingFrame');
+      if (!iframe?.src) return;
+      iframe.contentWindow.postMessage('InputDisable', new URL(iframe.src).origin);
+    }
+
+
+    // ============================================================
+    // Single Decision Point
+    // ============================================================
+    function updateComposer(eventName = "updateComposer") {
+
+      if (humanPresent || allowOpen) postIframeEnable();
+      else postIframeDisable();
+
+      saveState();
+    }
+
+
+    // ============================================================
+    // Bot Text Gating
+    // ============================================================
+    window.evaluateAndToggle = function handleMessageText(raw) {
+      const text = norm(raw);
+      allowOpen = allowList.has(text);
+
+
+      updateComposer("evaluateAndToggle");
+    };
+
+
+    // Prevent flash on first load
+    window.addEventListener("load", () => {
+      const iframe = document.getElementById('embeddedMessagingFrame');
+      if (iframe) iframe.addEventListener('load', () => updateComposer("iframe.load"));
+    });
+
+
+    // ============================================================
+    // onEmbeddedMessageSent — Bot/Agent/Customer messages
+    // ============================================================
+    window.addEventListener('onEmbeddedMessageSent', (event) => {
+      const ce = event?.detail?.conversationEntry;
+      if (!ce?.entryPayload) return;
+
+      try {
+        const parsed = JSON.parse(ce.entryPayload);
+        const messageText = parsed?.abstractMessage?.staticContent?.text;
+        window.evaluateAndToggle(messageText);
+      } catch (e) {
+        console.warn("[onEmbeddedMessageSent] Parse error:", e);
+      }
+    });
+
+
+    // ============================================================
+    // Participant Change — Look for Agent Join
+    // ============================================================
+    window.addEventListener("onEmbeddedMessagingConversationParticipantChanged", (evt) => {
+      const entryStr = evt?.detail?.conversationEntry?.entryPayload;
+      if (typeof entryStr !== "string") {
+        console.warn("[participantChanged] Invalid payload");
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(entryStr);
+        const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+
+        const first = entries[0] || {};
+        const role  = first?.participant?.role;
+        const op    = first?.operation;
+        if (role === "Agent" && op === "add") {
+          humanPresent = true;
+        }
+        else if (role === "Agent" && op === "remove") {
+          humanPresent = false;  // If you want sticky agent, REMOVE THIS LINE.
+        }
+        else if (role === "Chatbot" && op === "add") {
+          humanPresent = false;
+        }
+        updateComposer("participantChanged");
+      } catch (e) {
+        console.error("[participantChanged] Parse error:", e);
+      }
+    });
+
+
+    // ============================================================
+    // Lifecycle Events
+    // ============================================================
+    window.addEventListener("onEmbeddedMessagingReady", () => {
+        let botSourceURL = window.location.href;
+      embeddedservice_bootstrap.prechatAPI.setHiddenPrechatFields({"BotSource": "Non-PDP", "BotSourceURL":botSourceURL});
+      loadState();
+      updateComposer("onEmbeddedMessagingReady");
+    });
+
+    window.addEventListener("onEmbeddedMessagingSessionStarted", () => {
+      updateComposer("onEmbeddedMessagingSessionStarted");
+    });
+
+    window.addEventListener("onEmbeddedMessagingSessionStatusUpdate", (evt) => {
+      const status = String(
+        evt?.detail?.status || evt?.detail?.sessionStatus || ""
+      ).toLowerCase();
+
+      if (status === "ended" || status === "terminated" || status === "closed") {
+        humanPresent = false;
+        allowOpen = false;
+        saveState();
+      }
+
+      updateComposer("onEmbeddedMessagingSessionStatusUpdate");
+    });
+
+
+    // ============================================================
+    // Init Embedded Messaging
+    // ============================================================
+    embeddedservice_bootstrap.init(
+				'00DSu0000017YcH',
+				'Chatbot_Shopify_Staging_NON_PDP',
+				'https://tonal--full.sandbox.my.site.com/ESWChatbotShopifyStagin1760115575505',
+				{
+					scrt2URL: 'https://tonal--full.sandbox.my.salesforce-scrt.com'
+				}
+			);
+
+  } catch (err) {
+    console.error("Error loading Embedded Messaging:", err);
+  }
+}
+</script>
+
+<script>
+//
+// Dispatcher events
+//
+window.addEventListener("message", (event) => {
+  if (
+    event.data?.method === "EMBEDDED_MESSAGING_DISPATCH_EVENT_TO_HOST" &&
+    event.data?.data?.eventDetails?.conversationEntry?.entryPayload
+  ) {
+    try {
+      const payload = JSON.parse(
+        event.data.data.eventDetails.conversationEntry.entryPayload
+      );
+      const messageText = payload?.abstractMessage?.staticContent?.text;
+      window.evaluateAndToggle?.(messageText);
+    } catch (e) {
+      console.warn("[dispatcher] Parse error:", e);
+    }
+  }
+});
+</script>
+
+<script type='text/javascript' src='https://tonal--full.sandbox.my.site.com/ESWChatbotShopifyStagin1760115575505/assets/js/bootstrap.min.js' onload='initEmbeddedMessaging()'></script>
+
+  </body>
+</html>
